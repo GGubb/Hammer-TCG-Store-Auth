@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Configurar contraseña</title>
+  <script type="module">
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js'
+    
+    const supabaseUrl = "https://xtgzlzkiydsxciblbgqw.supabase.co"
+    const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh0Z3psemtpeWRzeGNpYmxiZ3F3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk2MzI3MzEsImV4cCI6MjA3NTIwODczMX0.xb6KZhtwxw4TS0QpBlwJSUp04278mD_JoF_odcZey48"
+    const supabase = createClient(supabaseUrl, supabaseKey)
+
+    // Helpers
+    const qs = (s) => new URLSearchParams(s)
+
+    // Espera al DOM
+    document.addEventListener('DOMContentLoaded', async () => {
+      const loadingEl = document.getElementById('loading')
+      const formEl = document.getElementById('set-password-section')
+      const status = document.getElementById('status')
+
+      loadingEl.style.display = 'block'
+      formEl.style.display = 'none'
+      status.textContent = ''
+
+      try {
+        // 1) Intentar procesar token proveniente de fragment (#access_token=...) o query (?code=...)
+        const hash = window.location.hash // fragmento: #access_token=...
+        const search = window.location.search // query: ?code=... (password reset uses ?code=...)
+        let sessionResult = null
+
+        if (hash && hash.includes('access_token')) {
+          console.log('Detectado fragmento con access_token. Procesando...')
+          // Esto parsea el fragmento y guarda la sesión en el cliente
+          // IMPORTANTE: item storeSession: true para que la sesión se guarde en localStorage/cookies
+          sessionResult = await supabase.auth.getSessionFromUrl({ storeSession: true }).catch(e => {
+            console.warn('getSessionFromUrl falló:', e)
+            return null
+          })
+        } else if (search && search.includes('code=')) {
+          console.log('Detectado code en query (posible reset password). Intercambiando code por sesión...')
+          const params = qs(window.location.search.replace('?', ''))
+          const code = params.get('code')
+          if (code) {
+            // exchangeCodeForSession devuelve session y error
+            sessionResult = await supabase.auth.exchangeCodeForSession(code).catch(e => {
+              console.warn('exchangeCodeForSession falló:', e)
+              return null
+            })
+          }
+        } else {
+          console.log('No hay token ni code en la URL. Esperando acción del usuario.')
+        }
+
+        // 2) Después de intentar procesar, comprobar si hay session almacenada
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) {
+          // No hay sesión → mostrar mensaje claro al usuario
+          loadingEl.innerHTML = `
+            <div class="card">
+              <h2>Acceso inválido o expirado</h2>
+              <p>Por favor, abra el enlace mágico desde el correo en la <strong>misma pestaña</strong> y asegúrese de que la URL de redirección en Supabase apunta a esta página.</p>
+              <p>Si el enlace ya expiró, solicita uno nuevo desde el panel de Supabase.</p>
+            </div>
+          `
+          return
+        }
+
+        // 3) Si hay sesión, mostrar formulario para cambiar contraseña
+        console.log('Sesión activa detectada:', session.user.email)
+        loadingEl.style.display = 'none'
+        formEl.style.display = 'block'
+
+        // 4) Registrar escucha (opcional) para futuros cambios de auth
+        supabase.auth.onAuthStateChange((event, newSession) => {
+          console.log('Evento auth:', event)
+          if (event === 'SIGNED_OUT') {
+            // Si se desloguea, ocultar formulario
+            formEl.style.display = 'none'
+            loadingEl.style.display = 'block'
+            loadingEl.textContent = 'Sesión cerrada. Vuelva a abrir el link mágico.'
+          }
+        })
+      } catch (err) {
+        console.error('Error al procesar la autenticación:', err)
+        loadingEl.innerHTML = `<div class="card"><p>Error al procesar el enlace. Revisa la consola.</p></div>`
+      }
+    })
+
+    // Cambio de contraseña
+    window.changePassword = async () => {
+      const newPassword = document.getElementById("newPassword").value
+      const confirmPassword = document.getElementById("confirmPassword").value
+      const status = document.getElementById("status")
+
+      status.textContent = ''
+
+      if (newPassword !== confirmPassword) {
+        status.textContent = "Las contraseñas no coinciden."
+        return
+      }
+      if (newPassword.length < 6) {
+        status.textContent = "La contraseña debe tener al menos 6 caracteres."
+        return
+      }
+
+      // Asegurarse de que hay sesión justo antes de updateUser
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        status.textContent = 'Sesión no disponible. Abre el link mágico en la misma pestaña.'
+        return
+      }
+
+      // Actualizar contraseña
+      const { error } = await supabase.auth.updateUser({ password: newPassword })
+      if (error) {
+        console.error("Error al actualizar contraseña:", error)
+        status.textContent = "Error al actualizar la contraseña. Inténtalo de nuevo."
+      } else {
+        status.textContent = "Contraseña actualizada correctamente. Redirigiendo..."
+        setTimeout(() => window.location.href = 'admin.html', 1500)
+      }
+    }
+  </script>
+
+  <style>
+    body { font-family: sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; background:#f2f2f2; }
+    .card { background:white; padding:2rem; border-radius:12px; box-shadow:0 0 10px rgba(0,0,0,0.1); width:320px; text-align:center; }
+    input { width:100%; padding:8px; margin-top:10px; border-radius:6px; border:1px solid #ccc; }
+    button { margin-top:15px; background:#0077cc; color:white; border:none; padding:10px 16px; border-radius:6px; cursor:pointer; }
+    button:hover { background:#005fa3; }
+    #status { margin-top:10px; font-size:0.9em; color:#333; }
+  </style>
+</head>
+
+<body>
+  <div id="loading" class="card">
+    <p>Procesando acceso... un momento por favor.</p>
+  </div>
+
+  <div id="set-password-section" class="card" style="display:none;">
+    <h2>Establecer nueva contraseña</h2>
+    <input type="password" id="newPassword" placeholder="Nueva contraseña" />
+    <input type="password" id="confirmPassword" placeholder="Confirmar contraseña" />
+    <button onclick="changePassword()">Guardar contraseña</button>
+    <p id="status"></p>
+  </div>
+</body>
+</html>
