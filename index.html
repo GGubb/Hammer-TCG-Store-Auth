@@ -13,7 +13,6 @@
     // Helpers
     const qs = (s) => new URLSearchParams(s)
 
-    // Espera al DOM
     document.addEventListener('DOMContentLoaded', async () => {
       const loadingEl = document.getElementById('loading')
       const formEl = document.getElementById('set-password-section')
@@ -24,61 +23,60 @@
       status.textContent = ''
 
       try {
-        // 1) Intentar procesar token proveniente de fragment (#access_token=...) o query (?code=...)
-        const hash = window.location.hash // fragmento: #access_token=...
-        const search = window.location.search // query: ?code=... (password reset uses ?code=...)
+        const params = new URLSearchParams(window.location.search)
+        const hasCode = params.has('code')
+        const hasAccessToken = window.location.hash.includes('access_token')
+
         let sessionResult = null
 
-        if (hash && hash.includes('access_token')) {
-          console.log('Detectado fragmento con access_token. Procesando...')
-          // Esto parsea el fragmento y guarda la sesión en el cliente
-          // IMPORTANTE: item storeSession: true para que la sesión se guarde en localStorage/cookies
-          sessionResult = await supabase.auth.getSessionFromUrl({ storeSession: true }).catch(e => {
-            console.warn('getSessionFromUrl falló:', e)
-            return null
-          })
-        } else if (search && search.includes('code=')) {
-          console.log('Detectado code en query (posible reset password). Intercambiando code por sesión...')
-          const params = qs(window.location.search.replace('?', ''))
-          const code = params.get('code')
-          if (code) {
-            // exchangeCodeForSession devuelve session y error
-            sessionResult = await supabase.auth.exchangeCodeForSession(code).catch(e => {
-              console.warn('exchangeCodeForSession falló:', e)
-              return null
-            })
+        // 🔹 Caso 1: Link mágico normal (#access_token=...)
+        if (hasAccessToken && !hasCode) {
+          console.log('Detectado link mágico normal. Procesando sesión...')
+          const { data, error } = await supabase.auth.getSessionFromUrl({ storeSession: true })
+          if (error) {
+            console.warn('Error procesando link mágico:', error)
+            loadingEl.innerHTML = `<div class="card"><p>Error procesando el enlace mágico. Intenta abrirlo de nuevo.</p></div>`
+            return
           }
-        } else {
-          console.log('No hay token ni code en la URL. Esperando acción del usuario.')
+
+          console.log('Inicio de sesión exitoso, redirigiendo...')
+          window.location.href = 'admin.html'
+          return
         }
 
-        // 2) Después de intentar procesar, comprobar si hay session almacenada
+        // 🔹 Caso 2: Invitación / Restablecer contraseña (?code=...)
+        else if (hasCode) {
+          console.log('Detectado código (?code=...). Intercambiando por sesión...')
+          const code = params.get('code')
+          sessionResult = await supabase.auth.exchangeCodeForSession(code).catch(e => {
+            console.warn('exchangeCodeForSession falló:', e)
+            return null
+          })
+        }
+
+        // 2️⃣ Verificar si hay sesión activa después de procesar
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) {
-          // No hay sesión → mostrar mensaje claro al usuario
           loadingEl.innerHTML = `
             <div class="card">
               <h2>Acceso inválido o expirado</h2>
-              <p>Por favor, abra el enlace mágico desde el correo en la <strong>misma pestaña</strong> y asegúrese de que la URL de redirección en Supabase apunta a esta página.</p>
-              <p>Si el enlace ya expiró, solicita uno nuevo desde el panel de Supabase.</p>
+              <p>Por favor, abre el enlace mágico desde tu correo en la <strong>misma pestaña</strong> y asegúrate de que la URL de redirección en Supabase apunta a esta página.</p>
             </div>
           `
           return
         }
 
-        // 3) Si hay sesión, mostrar formulario para cambiar contraseña
+        // 3️⃣ Mostrar formulario de contraseña si viene del flujo de invitación/reset
         console.log('Sesión activa detectada:', session.user.email)
         loadingEl.style.display = 'none'
         formEl.style.display = 'block'
 
-        // 4) Registrar escucha (opcional) para futuros cambios de auth
-        supabase.auth.onAuthStateChange((event, newSession) => {
+        supabase.auth.onAuthStateChange((event) => {
           console.log('Evento auth:', event)
           if (event === 'SIGNED_OUT') {
-            // Si se desloguea, ocultar formulario
             formEl.style.display = 'none'
             loadingEl.style.display = 'block'
-            loadingEl.textContent = 'Sesión cerrada. Vuelva a abrir el link mágico.'
+            loadingEl.textContent = 'Sesión cerrada. Abre nuevamente el enlace mágico.'
           }
         })
       } catch (err) {
@@ -87,7 +85,7 @@
       }
     })
 
-    // Cambio de contraseña
+    // 🧩 Cambio de contraseña
     window.changePassword = async () => {
       const newPassword = document.getElementById("newPassword").value
       const confirmPassword = document.getElementById("confirmPassword").value
@@ -104,14 +102,12 @@
         return
       }
 
-      // Asegurarse de que hay sesión justo antes de updateUser
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
-        status.textContent = 'Sesión no disponible. Abre el link mágico en la misma pestaña.'
+        status.textContent = 'Sesión no disponible. Abre el enlace mágico en la misma pestaña.'
         return
       }
 
-      // Actualizar contraseña
       const { error } = await supabase.auth.updateUser({ password: newPassword })
       if (error) {
         console.error("Error al actualizar contraseña:", error)
